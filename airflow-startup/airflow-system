@@ -1,0 +1,156 @@
+#!/bin/sh
+#
+# airflow-system        This shell script takes care of starting and stopping
+#               the airflow subsystem (airflow scheduler and web server). The config uses a Localexecutor so no celery workers.
+#
+# chkconfig:  2345 64 36
+# description:  Airflow server.
+# processname: airflow
+# config: /opt/ds-ops/data_pipeline/airflow_home/airflow.cfg
+# pidfile: /opt/ds-ops/data_pipeline/airflow_home/webserver.pid
+### BEGIN INIT INFO
+# Provides: airflow
+# Required-Start: $local_fs $remote_fs $network $named $syslog $time
+# Required-Stop: $local_fs $remote_fs $network $named $syslog $time
+# Short-Description: start and stop Airflow server
+# Description: Airflow server
+### END INIT INFO
+
+#set -x
+export AIRFLOW_HOME=/opt/ds-ops/data_pipeline/airflow_home
+export AIRFLOW_CONFIG=/opt/ds-ops/data_pipeline/airflow_home/airflow.cfg
+EXEC_SCRIPT=/opt/anaconda2/bin/airflow
+CMDNAME=`basename $0`
+LOG_DIR=/opt/ds-ops/data_pipeline/airflow_home/logs
+PID_DIR=/opt/ds-ops/data_pipeline/airflow_home
+PID_FILE="$PID_DIR"/airflow_webserver.pid
+LOG_FILE="$LOG_DIR"/webserver.log
+LOG_FILE_SCHED="$LOG_DIR"/scheduler.log
+LOG_FILE_WORKER="$LOG_DIR"/worker.log
+PORT=8088
+RUN_USER=ds-ops
+
+if ! grep "^$RUN_USER:" /etc/passwd > /dev/null
+then
+  echo "no user : $RUN_USER"
+  exit
+fi
+
+# Source function library.
+. /etc/init.d/functions
+
+export PATH=/opt/anaconda2/bin/:/usr/local/bin/:$PATH:/home/ds-ops/.local/bin:/home/ds-ops/bin
+# Source run_user profile
+#. /home/$RUN_USER/.bash_profile
+
+test -d $LOG_DIR || mkdir $LOG_DIR; chmod -R 777 $LOG_DIR
+
+RETVAL=0
+
+case "$1" in
+    start)
+        date
+        /bin/ps -ef | grep "airflow webserver" | grep -v grep
+        if [ $? -eq 1 ]; then
+          echo -n "Starting Airflow WebServer"
+          
+          if [ `whoami` == "root" ]; then
+          	/bin/su $RUN_USER -c "$EXEC_SCRIPT webserver -p $PORT 0<&- &> $LOG_FILE &"
+          fi
+          if [ `whoami` == "$RUN_USER" ]; then
+               $EXEC_SCRIPT webserver -p $PORT 0<&- &> $LOG_FILE &
+          fi
+          sleep 3
+          echo 
+          ps aux | grep "airflow webserver" | grep -v grep | awk '{ print $2 }'
+          success
+        else
+          echo -n "Airflow WebServer is already running"
+          RETVAL=1
+          #failure
+        fi
+        /bin/ps -ef | grep "airflow scheduler" | grep -v grep
+        if [ $? -eq 1 ]; then
+          echo -n "Starting Airflow Scheduler"
+          if [ `whoami` == "root" ]; then
+          	/bin/su $RUN_USER -c "$EXEC_SCRIPT scheduler 0<&- &> $LOG_FILE_SCHED &"
+          fi
+          if [ `whoami` == "$RUN_USER" ]; then
+          	$EXEC_SCRIPT scheduler 0<&- &> $LOG_FILE_SCHED &
+	  fi
+          sleep 3
+          echo 
+          ps aux | grep "airflow scheduler" | grep -v grep | awk '{ print $2 }' | xargs
+          success
+        else
+          echo -n "Airflow scheduler is already running"
+          RETVAL=1
+          #failure
+        fi
+        ;;
+    stop)
+        date
+        /bin/ps -ef | grep "airflow webserver" | grep -v grep > /dev/null
+        if [ $? -eq 0 ]; then
+          echo -n "Stopping Airflow WebServer"
+          #test -f $PID_FILE && cat $PID_FILE | xargs kill -s SIGKILL
+          ps aux | grep "airflow webserver" | grep -v grep| awk '{ print $2 }' | xargs kill -s SIGKILL 
+          ps aux | grep "gunicorn: master \[airflow-webserver\]" | grep -v grep | awk '{ print $2 }' | xargs kill -s SIGKILL 
+          ps aux | grep "gunicorn: worker \[airflow-webserver\]" | grep -v grep | awk '{ print $2 }' | xargs kill -s SIGKILL 
+          rm -f $PID_FILE
+          success
+        else
+          echo -n "Airflow WebServer is not running"
+          RETVAL=1
+          failure
+        fi
+        echo
+        /bin/ps -ef | grep "airflow scheduler" | grep -v grep > /dev/null
+        if [ $? -eq 0 ]; then
+          echo -n "Stopping Airflow scheduler"
+          ps aux | grep "airflow scheduler" | grep -v grep |  awk '{ print $2 }' | xargs kill -s SIGKILL 
+          success
+        else
+          echo -n "Airflow scheduler is not running"
+          RETVAL=1
+          failure
+        fi
+        echo
+        ;;
+    restart)
+        $0 stop
+        $0 start
+        ;;
+    status)
+        date
+        #status airflow server
+        /bin/ps -ef | grep "airflow webserver" | grep -v grep > /dev/null
+        if [ $? -eq 0 ]; then
+          echo "Airflow WebServer is running "
+          /bin/ps -ef | grep "airflow webserver" | grep -v grep | awk '{ print $2 }' | xargs
+          success
+        else
+          echo -n "Airflow WebServer is not running"
+          RETVAL=1
+          failure
+        fi
+        echo
+        /bin/ps -ef | grep "airflow scheduler" | grep -v grep > /dev/null 
+        if [ $? -eq 0 ]; then
+          echo  "Airflow scheduler is running "
+          /bin/ps -ef | grep "airflow scheduler" | grep -v grep  | awk '{ print $2 }' | xargs 
+          success
+        else
+          echo -n "Airflow scheduler is not running"
+          RETVAL=1
+          failure
+        fi
+        echo
+        ;;
+    *)
+        echo "Usage: $0 {start|stop|status|restart|reload}"
+        exit 1
+        ;;
+esac
+
+exit $RETVAL
